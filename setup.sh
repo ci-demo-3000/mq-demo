@@ -6,6 +6,7 @@ repo=$1
 cd "$(dirname "$0")"
 git init -q -b main && git add -A && git commit -qm "init"
 gh repo create "$repo" --public --source . --push
+gh api -X PATCH "repos/$repo" -F allow_auto_merge=true --silent   # scenario.sh enqueues via --auto
 # only gate-after is required: "before" runs in the queue for comparison but can't block it
 gh api -X POST "repos/$repo/rulesets" --input - <<'JSON'
 {
