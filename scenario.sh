@@ -7,7 +7,7 @@ git checkout -q main && git pull -q
 for i in 1 2 3; do
   b="demo-$i-$(date +%s)"
   git checkout -q -b "$b" main
-  echo "change $i $(date)" >> apps/web/README.md
+  echo "change $i $(date)" > "apps/web/change-$i.txt"   # own file per PR, so queued PRs never conflict
   [[ $i == 2 ]] && touch apps/admin/FAIL_E2E_IN_QUEUE
   git add -A && git commit -qm "demo change $i"
   git push -q -u origin "$b"
