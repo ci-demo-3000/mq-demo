@@ -24,11 +24,16 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     outputs:
-      libs: ${{ steps.a.outputs.libs }}
+      apps: ${{ steps.a.outputs.apps }}
+      e2e: ${{ steps.a.outputs.e2e }}
     steps:
+      - uses: actions/checkout@v4
       - id: a
-        # shortcut: every lib is "affected"; affected-detection isn't what we're testing
-        run: echo 'libs=["a","b","c"]' >> "$GITHUB_OUTPUT"
+        # apps = deployable projects; e2e = apps that have an <app>-e2e Playwright project
+        run: |
+          projects=$(.github/scripts/mock-nx-affected.sh)
+          echo "apps=$(jq -c 'map(select(endswith("-e2e") | not))' <<< "$projects")" >> "$GITHUB_OUTPUT"
+          echo "e2e=$(jq -c 'map(select(endswith("-e2e")) | rtrimstr("-e2e"))' <<< "$projects")" >> "$GITHUB_OUTPUT"
 
   deploy-and-e2e:
     needs: [meta, analyze]
@@ -36,18 +41,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lib: ${{ fromJson(needs.analyze.outputs.libs) }}
+        app: ${{ fromJson(needs.analyze.outputs.apps) }}
     concurrency:
-      group: ${{ github.workflow }}-${{ matrix.lib }}-${{ needs.meta.outputs.key }}
+      group: ${{ github.workflow }}-${{ matrix.app }}-${{ needs.meta.outputs.key }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
       - id: deploy
         run: |
-          url=$(.github/scripts/mock-deploy.sh ${{ matrix.lib }})
+          url=$(.github/scripts/mock-deploy.sh ${{ matrix.app }})
           test -n "$url" || { echo "::error::no deployment URL"; exit 1; }
           echo "url=$url" >> "$GITHUB_OUTPUT"
-      - run: .github/scripts/mock-e2e.sh ${{ matrix.lib }}
+      - if: contains(fromJson(needs.analyze.outputs.e2e), matrix.app)
+        run: .github/scripts/mock-playwright.sh ${{ matrix.app }}
         env:
           BASE_URL: ${{ steps.deploy.outputs.url }}
 
