@@ -1,0 +1,61 @@
+# Proposed setup: per-PR concurrency in the queue, deploy+e2e in one job, gate fails on cancelled too.
+name: after
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      key: ${{ steps.k.outputs.key }}
+    steps:
+      - id: k
+        env:  # via env, never inline: head_ref is a user-controlled branch name on PRs
+          REF: ${{ github.event.merge_group.head_ref || github.head_ref || github.run_id }}
+        # gh-readonly-queue/<base>/pr-123-<sha> -> pr-123; PR branch names pass through unchanged
+        run: echo "key=$(sed -E 's#.*/(pr-[0-9]+)-[0-9a-f]{40}$#\1#' <<< "$REF")" >> "$GITHUB_OUTPUT"
+
+  analyze:
+    runs-on: ubuntu-latest
+    outputs:
+      libs: ${{ steps.a.outputs.libs }}
+    steps:
+      - id: a
+        # shortcut: every lib is "affected"; affected-detection isn't what we're testing
+        run: echo 'libs=["a","b","c"]' >> "$GITHUB_OUTPUT"
+
+  deploy-and-e2e:
+    needs: [meta, analyze]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.analyze.outputs.libs) }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.lib }}-${{ needs.meta.outputs.key }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - id: deploy
+        run: |
+          url=$(.github/scripts/mock-deploy.sh ${{ matrix.lib }})
+          test -n "$url" || { echo "::error::no deployment URL"; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+      - run: .github/scripts/mock-e2e.sh ${{ matrix.lib }}
+        env:
+          BASE_URL: ${{ steps.deploy.outputs.url }}
+
+  check-status:
+    name: gate-after
+    needs: [meta, analyze, deploy-and-e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

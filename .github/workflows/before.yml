@@ -1,0 +1,57 @@
+# Mirrors the current setup: separate deploy/e2e matrix jobs, e2e on always(), URL via job outputs.
+name: before
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    outputs:
+      libs: ${{ steps.a.outputs.libs }}
+    steps:
+      - id: a
+        # shortcut: every lib is "affected"; affected-detection isn't what we're testing
+        run: echo 'libs=["a","b","c"]' >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: analyze
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.analyze.outputs.libs) }}
+    outputs:
+      url: ${{ steps.d.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: d
+        run: echo "url=$(.github/scripts/mock-deploy.sh ${{ matrix.lib }})" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    needs: [analyze, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.analyze.outputs.libs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: .github/scripts/mock-e2e.sh ${{ matrix.lib }}
+        env:
+          BASE_URL: ${{ needs.deploy.outputs.url }}
+
+  check-status:
+    name: gate-before
+    needs: [analyze, deploy, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+        if: contains(needs.*.result, 'failure')
